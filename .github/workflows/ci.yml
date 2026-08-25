@@ -27,6 +27,8 @@ jobs:
 
       - name: Run DEPTH sweep
         run: make sweep
+      - name: pe sweep
+        run: make sweep-pe
 
       - name: Upload results
         if: always()
