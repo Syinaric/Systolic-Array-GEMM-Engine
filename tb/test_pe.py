@@ -1,12 +1,12 @@
 """ cocotb tb for rtl/pe.sv """
-
-import os 
-import random 
-import cocotb 
-from cocotb.clock import clock 
-from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, Timer 
+ 
+import os
+import random
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, Timer
 from pe_model import PEModel, expected_dot, signed_range, wrap_signed
-from delay_model import expected_out 
+from delay_model import expected_out
 
 #helpers
 
@@ -41,8 +41,8 @@ class PEHarness:
         self.dw = int(dut.DATA_WIDTH.value) 
         self.aw = int(dut.ACC_WIDTH.value) 
         self.model = PEModel(self.dw, self.aw) 
-        self.cylce = 0 
-        self.seed = int(os.environ.get("SEED") or random.randrange )
+        self.cycle = 0 
+        self.seed = int(os.environ.get("SEED") or random.randrange(2**31))
         self.rng = random.Random(self.seed) 
 
 
@@ -54,10 +54,10 @@ class PEHarness:
             await RisingEdge(self.dut.clk) 
             self.model.step(reset=1) 
         await FallingEdge(self.dut.clk)
-        self.dut.eset.value = 0 
+        self.dut.reset.value = 0 
         self.dut._log.info(f"DUT parameters: DATA_WIDTH={self.dw} ACC_WIDTH={self.aw} "
                            f"SEED= {self.seed} (reproduce with: make MODULE_NAME=pe"
-                           f"k=<k> SEED = {self.seed})")
+                           f"K=<k> SEED={self.seed})")
 
 
     def _drive_idle(self): 
@@ -90,10 +90,10 @@ class PEHarness:
         await ReadOnly()
 
 
-        expected = self.model.step(  a_in=a_in, b_in=b_in, first_in=first_in, last_in=last_in,
-            drain_shift=drain_shift, drain_in=drain_in, en=en, reset=reset,)
-        if check: 
-            self._compare(expected, a_in, b_in, first_in, last_in, en, reset )
+        expected = self.model.step(a_in=a_in, b_in=b_in, first_in=first_in, last_in=last_in,
+                                   drain_shift=drain_shift, drain_in=drain_in, en=en, reset=reset)
+        if check:
+            self._compare(expected, a_in, b_in, first_in, last_in, en, reset)
             self.cycle += 1 
             return expected 
 
@@ -105,7 +105,7 @@ class PEHarness:
             "drain_out" : self.aw, "acc": self.aw, "active" : 1
         }
         for name in self.PORTS + self.INTERNAL: 
-            w = width[name] 
+            w = widths[name] 
             sig = getattr(d, name) 
             got = read_signed(sig, name, w) if w > 1 else read_int(sig, name) 
             exp = getattr(expected, name )
@@ -115,22 +115,27 @@ class PEHarness:
                 f"last_in={last_in} en={en} reset={reset}\n"
                 f"seed={self.seed}"
             )
-    async def run_tile(self, a_vec, b_vec, drain_after = True) :
-        """drive 1 k length tile. returns drained result"""
-        k = len(a_vec) 
-        for i, (a, b) in enumerate(zip(a_vec, b_vec)): 
-            await self.step (a_in=a, b_in=b, firs_in = int(i == 0), last_in = int(i == k - 1))
-        if drain_after : 
-            s = await self.step() 
-            return s.drain_out 
-        return None 
+    async def run_tile(self, a_vec, b_vec) -> int:
+        """Drive one complete K-length tile and return the drained result."""
+        if len(a_vec) != len(b_vec):
+            raise ValueError("a_vec and b_vec must be the same length")
+        k = len(a_vec)
+        for i, (a, b) in enumerate(zip(a_vec, b_vec)):
+            await self.step(
+                a_in=a,
+                b_in=b,
+                first_in=int(i == 0),
+                last_in=int(i == k - 1),
+            )
+        s = await self.step()      # cap fires here, copying acc into the shadow
+        return s.drain_out
     
     def random_operands(self, n): 
-        lo, hi = signed_range
+        lo, hi = signed_range(self.dw)
         return [self.rng.randint(lo,hi)for _ in range (n)] 
 
 def get_k(): 
-    return int(os.environ.get ("k") or 8)
+    return int(os.environ.get ("K") or 8)
 
 
     #signedness 
@@ -147,8 +152,8 @@ async def test_signed_quadrants(dut):
 
     for a, b in vectors: 
         result = await h.run_tile ([a], [b])
-        assert result == a*b, f"{a} * {b} = {results}, expected {a * b}"
-        dut._log.info(f" sign quadrants passed ({len(vectors)} vectors)")
+        assert result == a*b, f"{a} * {b} = {result}, expected {a * b}"
+    dut._log.info(f" sign quadrants passed ({len(vectors)} vectors)")
 
 #acc 
 @cocotb.test() 
@@ -163,7 +168,7 @@ async def test_k_accumulation_random(dut):
         b_vec = h.random_operands(k) 
         result = await h.run_tile(a_vec, b_vec) 
         expected = expected_dot(a_vec, b_vec, h.aw) 
-        assert expected == result (
+        assert expected == result, (
             f" tile{tile} : K{k} result={result} expected{expected}, " 
             f" seed{h.seed} "
         )
@@ -188,7 +193,7 @@ async def test_k1_coincdent_irst_last(dut):
         assert read_signed (dut.acc, "acc", h.aw) == 16384, (
             'acc kept accumalating after k=1 tile ws completed' 
         )
-        dut._log.info ("K=1 coincident first/last passed")
+    dut._log.info ("K=1 coincident first/last passed")
 
 @cocotb.test()
 async def test_first_clears_not_adds(dut): 
@@ -216,13 +221,12 @@ async def test_acc_frozen_after_last(dut):
 
     for i in range(k): 
         await h.step(a_in =  a_vec[i], b_in = b_vec[i], first_in=int(i == 0), last_in=int(i == k - 1))
-        lo, _ = signed_range(h.dw) 
-        for _ in range(10): 
-            await h.step(a_in = lo, b_in = lo)  
-            assert read_signed (dut.acc, "acc", h.aw) == expected, (
-                "acc moved after last_in; the acc window isnt closing" 
-            )
-            dur._log.info("acc correct frozen after last_in properly")
+    lo, _ = signed_range(h.dw) 
+    for _ in range(10): 
+        await h.step(a_in = lo, b_in = lo)  
+        assert read_signed (dut.acc, "acc", h.aw) == expected, (
+            "acc moved after last_in; the acc window isnt closing" )
+    dut._log.info("acc correct frozen after last_in properly")
 
 #pass thru, reusing golden model from delay 
 
@@ -363,10 +367,6 @@ async def test_en_holds_without_loss(dut):
 @cocotb.test()
 async def test_accumulator_width(dut):
     """Near-overflow at the configured width, and wrapping past it.
- 
-    At ACC_WIDTH=32 this only ever exercises the near-overflow half. Run with
-    a narrowed ACC_WIDTH to reach the wrapping half:
-        make MODULE_NAME=pe ACC_WIDTH=18 K=16
     """
     h = PEHarness(dut)
     await h.start()

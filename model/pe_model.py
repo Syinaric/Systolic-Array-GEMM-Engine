@@ -4,7 +4,7 @@
 
 from typing import NamedTuple
 
-class PEstate(NamedTuple):
+class PEState(NamedTuple):
     """everything visable at the ReadOnly point after 1 rising edge  """
     a_out: int
     b_out: int
@@ -54,7 +54,7 @@ class PEModel :
             raise ValueError(f"{name}= {value} outside signed {self.data_width} -bit range"
                              f"[{lo}, {hi}]. this is a stimulus bug, not a DUT")
         
-    def state(self) -> PEstate: 
+    def state(self) -> PEState: 
         """current registered state """
         return PEState(
             a_out=self.a_out,
@@ -73,7 +73,7 @@ class PEModel :
              drain_shift: int = 0, 
              drain_in: int = 0, 
              en: int = 1, 
-             reset: int = 0,) -> PEstate: 
+             reset: int = 0,) -> PEState: 
         """ advance 1 rising edge th the given input vector. 
         returns the state t the ReadOnly point after that edge. """
         self._check_operand("a_in", a_in)
