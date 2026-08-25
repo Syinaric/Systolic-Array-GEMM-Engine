@@ -183,3 +183,212 @@ async def test_k1_coincdent_irst_last(dut):
     s = await h.step() 
     assert s.drain_out == 16384
 
+    for _ in range (5): 
+        await h.step(a_in=50, b_in = 50) 
+        assert read_signed (dut.acc, "acc", h.aw) == 16384, (
+            'acc kept accumalating after k=1 tile ws completed' 
+        )
+        dut._log.info ("K=1 coincident first/last passed")
+
+@cocotb.test()
+async def test_first_clears_not_adds(dut): 
+    """back to back tests shouldnt inherit the previous accumalator"""
+    h = PEHarness(dut)
+    await h.start()
+
+    r1 = await h.run_tile ([10, 10, 10], [10, 10, 10])
+    assert r1 == 300 
+    r2 = await h.run_tile ([1, 1,1], [1, 1, 1]) 
+    assert r2 == 3 , f"2nd tile inherited state from 1st : got {r2}"
+    dut._log.info("first_in clears rather than accumulates")
+
+
+@cocotb.test() 
+async def test_acc_frozen_after_last(dut): 
+    """acc should freeze the cycle after last_in"""
+
+    h = PEHarness(dut) 
+    await h.start() 
+    k = get_k() 
+    a_vec = h.random_operands(k)
+    b_vec = h.random_operands(k)
+    expected = expected_dot(a_vec, b_vec, h.aw)
+
+    for i in range(k): 
+        await h.step(a_in =  a_vec[i], b_in = b_vec[i], first_in=int(i == 0), last_in=int(i == k - 1))
+        lo, _ = signed_range(h.dw) 
+        for _ in range(10): 
+            await h.step(a_in = lo, b_in = lo)  
+            assert read_signed (dut.acc, "acc", h.aw) == expected, (
+                "acc moved after last_in; the acc window isnt closing" 
+            )
+            dur._log.info("acc correct frozen after last_in properly")
+
+#pass thru, reusing golden model from delay 
+
+@cocotb.test()
+async def test_passthrough_matches_delay_depth1(dut):
+    """The operand path is observationally a delay with DEPTH=1.
+    """
+    h = PEHarness(dut)
+    await h.start()
+ 
+    n = 24
+    a_hist, b_hist = [], []
+    for i in range(n):
+        a, b = h.rng.randint(1, 127), h.rng.randint(1, 127)
+        a_hist.append(a)
+        b_hist.append(b)
+        await h.step(a_in=a, b_in=b)
+        for sig, hist, name in ((dut.a_out, a_hist, "a_out"),
+                                (dut.b_out, b_hist, "b_out")):
+            got = read_signed(sig, name, h.dw)
+            exp = expected_out(hist, i, 1)
+            assert got == exp, (
+                f"cycle {i}: {name}={got}, expected {exp} "
+                f"(delay model, DEPTH=1)"
+            )
+ 
+    dut._log.info("operand pass thru matches delay DEPTH=1")
+ 
+ 
+@cocotb.test()
+async def test_no_combinational_path(dut):
+    """No input may reach any output within the same cycle."""
+    h = PEHarness(dut)
+    await h.start()
+ 
+    await FallingEdge(dut.clk)
+    dut.a_in.value = to_unsigned(0x3C, h.dw)
+    dut.b_in.value = to_unsigned(0x3C, h.dw)
+    await Timer(1, unit="ns")
+    await ReadOnly()
+    assert read_signed(dut.a_out, "a_out", h.dw) == 0, (
+        "a_out tracked a_in combinationally; the PE must be fully registered"
+    )
+    dut._log.info("no combinational input-to-output path")
+ 
+@cocotb.test()
+async def test_drain_capture_and_shift(dut):
+    """cap timing, shift timing, and capture priority over shift."""
+    h = PEHarness(dut)
+    await h.start()
+ 
+    # cap fires exactly one cycle after last_in, not on it.
+    await h.step(a_in=6, b_in=7, first_in=1, last_in=1)
+    assert read_signed(dut.drain_out, "drain_out", h.aw) != 42, (
+        "drain_out captured on the last_in cycle; capture must be one cycle later"
+    )
+    s = await h.step()
+    assert s.drain_out == 42, "cap did not fire one cycle after last_in"
+ 
+    # drain_shift moves drain_in with DEPTH=1 timing.
+    s = await h.step(drain_shift=1, drain_in=12345)
+    assert s.drain_out == 12345
+    s = await h.step(drain_shift=1, drain_in=-9999)
+    assert s.drain_out == -9999
+ 
+    # Held when neither cap nor shift is asserted.
+    s = await h.step()
+    assert s.drain_out == -9999, "shadow register did not hold"
+ 
+    # Capture wins over a coincident shift.
+    await h.step(a_in=2, b_in=3, first_in=1, last_in=1)
+    s = await h.step(drain_shift=1, drain_in=777)
+    assert s.drain_out == 6, (
+        f"shift won over capture on a coincident cycle: got {s.drain_out}"
+    )
+ 
+    dut._log.info("drain capture and shift timing passed")
+  
+@cocotb.test()
+async def test_reset_mid_accumulation(dut):
+    """Reset mid-tile clears acc, active and drain_out."""
+    h = PEHarness(dut)
+    await h.start()
+    k = max(get_k(), 3)
+ 
+    a_vec = h.random_operands(k)
+    b_vec = h.random_operands(k)
+    for i in range(k // 2):
+        await h.step(a_in=a_vec[i], b_in=b_vec[i], first_in=int(i == 0))
+ 
+    await h.step(reset=1)
+    assert read_signed(dut.acc, "acc", h.aw) == 0, "acc not cleared by reset"
+    assert read_int(dut.active, "active") == 0, "active not cleared by reset"
+    assert read_signed(dut.drain_out, "drain_out", h.aw) == 0
+ 
+    # Reset must also win while the array is stalled, or a stalled design cannot be recovered.
+    await h.step(a_in=9, b_in=9, first_in=1)
+    await h.step(a_in=9, b_in=9, en=0, reset=1)
+    assert read_signed(dut.acc, "acc", h.aw) == 0, (
+        "reset did not take priority over en; a stalled PE cannot be reset"
+    )
+ 
+    # And the PE still works afterwards.
+    result = await h.run_tile([4, 5], [6, 7])
+    assert result == 59, f"PE broken after reset: got {result}"
+ 
+    dut._log.info("reset mid-accumulation passed")
+ 
+ 
+@cocotb.test()
+async def test_en_holds_without_loss(dut):
+    """en low holds every register with no lost or duplicated products."""
+    h = PEHarness(dut)
+    await h.start()
+    k = max(get_k(), 4)
+ 
+    a_vec = h.random_operands(k)
+    b_vec = h.random_operands(k)
+    expected = expected_dot(a_vec, b_vec, h.aw)
+ 
+    for i in range(k):
+        await h.step(a_in=a_vec[i], b_in=b_vec[i],
+                     first_in=int(i == 0), last_in=int(i == k - 1))
+        # Stall for a random number of cycles mid-tile, driving garbage that must be ignored entirely.
+        for _ in range(h.rng.randint(0, 3)):
+            await h.step(a_in=h.rng.randint(-128, 127),
+                         b_in=h.rng.randint(-128, 127), en=0)
+ 
+    s = await h.step()
+    assert s.drain_out == expected, (
+        f"stalling changed the result: got {s.drain_out}, expected {expected}, "
+        f"seed={h.seed}"
+    )
+ 
+    dut._log.info("en stall holds state with no product loss")
+ 
+ #accumalator width 
+@cocotb.test()
+async def test_accumulator_width(dut):
+    """Near-overflow at the configured width, and wrapping past it.
+ 
+    At ACC_WIDTH=32 this only ever exercises the near-overflow half. Run with
+    a narrowed ACC_WIDTH to reach the wrapping half:
+        make MODULE_NAME=pe ACC_WIDTH=18 K=16
+    """
+    h = PEHarness(dut)
+    await h.start()
+    k = get_k()
+    lo, _ = signed_range(h.dw)
+ 
+    # K copies of the maximum-magnitude product.
+    a_vec = [lo] * k
+    b_vec = [lo] * k
+    result = await h.run_tile(a_vec, b_vec)
+    raw = k * (lo * lo)
+    expected = wrap_signed(raw, h.aw)
+    assert result == expected, (
+        f"K={k} max-magnitude accumulation: got {result}, expected {expected}"
+    )
+ 
+    if raw != expected:
+        dut._log.info(
+            f"wrap exercised: raw={raw} wrapped to {expected} "
+            f"at ACC_WIDTH={h.aw} (saturation would have given a different value)"
+        )
+    else:
+        dut._log.info(
+            f"no overflow at ACC_WIDTH={h.aw}, K={k} (headroom confirmed)"
+        )
