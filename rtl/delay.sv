@@ -3,9 +3,10 @@ module delay #(
     parameter int DATA_WIDTH = 8,
     parameter int DEPTH = 1
 )(
-    input  logic clk,
-    input  logic reset,
-    input  logic [DATA_WIDTH-1:0] in_data,
+    input logic clk,
+    input logic reset,
+    input logic en, 
+    input logic [DATA_WIDTH-1:0] in_data,
     output logic [DATA_WIDTH-1:0] out_data
 );
 
@@ -21,7 +22,7 @@ module delay #(
                     for (int i = 0; i < DEPTH; i++) begin
                         shift_reg[i] <= '0;
                     end
-                end else begin
+                end else if (en) begin
                     shift_reg[0] <= in_data;
                     for (int i = 1; i < DEPTH; i++) begin
                         shift_reg[i] <= shift_reg[i-1];
