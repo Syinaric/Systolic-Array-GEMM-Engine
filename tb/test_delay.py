@@ -24,6 +24,9 @@ async def start_clock(dut):
 
 async def apply_reset(dut, cycles = 3): 
     dut.reset.value = 1
+    # en is new: the skew chains now stall with the PE grid. These tests never
+    # exercise stalling, so hold it high and the module behaves exactly as before.
+    dut.en.value = 1
     dut.in_data.value = 0 
     for _ in range(cycles): 
         await RisingEdge(dut.clk)
@@ -170,10 +173,3 @@ async def test_bypass_is_combinational(dut):
             f"combinationally (out={observed})"
         )
         dut._log.info(f"DEPTH={depth} confirmed registered (no combinational path)")
-
-
-
-
-
-
-
