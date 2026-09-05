@@ -30,6 +30,14 @@ jobs:
       - name: pe sweep
         run: make sweep-pe
 
+      - name: Golden model self-tests
+        run: |
+          PYTHONPATH=model python model/pe_model.py
+          PYTHONPATH=model python model/systolic_array_model.py
+
+      - name: systolic array sweep
+        run: make sweep-array
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
