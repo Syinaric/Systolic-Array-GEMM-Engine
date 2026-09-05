@@ -154,8 +154,8 @@ class PEModel :
                 first_in = int(i == 0 ), 
                 last_in = int(i == k-1), 
             )
-            self.step() 
-            return self.drain_out
+        self.step()          # cap fires here, copying acc into the shadow
+        return self.drain_out
 
 def expected_dot(a_vec, b_vec, acc_width: int = 32) ->int: 
         #Reference dot product with the same wrapping as the acc
@@ -232,3 +232,4 @@ if __name__ == "__main__":
  
     print("\nALL PASS" if fails == 0 else f"\n{fails} FAILURES")
     
+    raise SystemExit(1 if fails else 0)
