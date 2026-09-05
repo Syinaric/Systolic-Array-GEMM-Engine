@@ -7,9 +7,11 @@ DEPTH      ?= 4
 DATA_WIDTH ?= 8
 ACC_WIDTH  ?= 32
 K          ?= 8
+N          ?= 8
 SEED ?=
 export SEED
 export K
+export N
 
 VERILOG_SOURCES += $(PWD)/rtl/$(MODULE_NAME).sv
 
@@ -32,9 +34,18 @@ COMPILE_ARGS += -Ppe.ACC_WIDTH=$(ACC_WIDTH)
 SIM_BUILD = sim_build/pe_k_$(K)_acc_$(ACC_WIDTH)
 endif
 
+# The array pulls in its children. Icarus does not care about file order.
+ifeq ($(MODULE_NAME),systolic_array)
+VERILOG_SOURCES += $(PWD)/rtl/pe.sv $(PWD)/rtl/delay.sv
+COMPILE_ARGS += -Psystolic_array.N=$(N)
+COMPILE_ARGS += -Psystolic_array.DATA_WIDTH=$(DATA_WIDTH)
+COMPILE_ARGS += -Psystolic_array.ACC_WIDTH=$(ACC_WIDTH)
+SIM_BUILD = sim_build/array_n_$(N)_k_$(K)
+endif
+
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
-.PHONY: sweep sweep-pe sweep-all
+.PHONY: sweep sweep-pe sweep-array sweep-all
 
 sweep:
 	@for d in 0 1 2 4 8; do \
@@ -52,4 +63,13 @@ sweep-pe:
 	@$(MAKE) -s MODULE_NAME=pe K=16 ACC_WIDTH=18 || exit 1
 	@echo "=== pe sweep passed ==="
 
-sweep-all: sweep sweep-pe
+sweep-array:
+	@for n in 2 3 4 8; do \
+	  for k in 1 4 16; do \
+	    echo "=== N=$$n K=$$k ==="; \
+	    $(MAKE) -s MODULE_NAME=systolic_array N=$$n K=$$k || exit 1; \
+	  done; \
+	done
+	@echo "=== array sweep passed ==="
+
+sweep-all: sweep sweep-pe sweep-array
