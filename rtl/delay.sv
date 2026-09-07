@@ -1,12 +1,17 @@
 // Purpose: stagger (skew) the matrix inputs.
+
+// CHANGE: added a global `en` stall input so this block can sit in front of the
+// PE grid. pe.sv gates every register on `en`; if the skew chains keep shifting
+// while the PEs are frozen, operands slide out of alignment and never recover.
+// Both must stall together or neither can.
 module delay #(
     parameter int DATA_WIDTH = 8,
     parameter int DEPTH = 1
 )(
-    input logic clk,
-    input logic reset,
-    input logic en, 
-    input logic [DATA_WIDTH-1:0] in_data,
+    input  logic clk,
+    input  logic reset,
+    input  logic en,
+    input  logic [DATA_WIDTH-1:0] in_data,
     output logic [DATA_WIDTH-1:0] out_data
 );
 
